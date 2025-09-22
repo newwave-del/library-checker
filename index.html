@@ -1,16 +1,14 @@
 <!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>송파도서관 대출 확인(실시간·배치)</title>
+<title>송파도서관 대출 확인(실시간·배치·송파고정)</title>
 <style>
   :root { --fg:#111; --muted:#666; --line:#eee; }
   body { font-family: system-ui, -apple-system, sans-serif; color:var(--fg); max-width:760px; margin:24px auto; padding:0 12px; }
   h1 { font-size:20px; margin:0 0 12px; }
   .controls { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:end; }
-  .grid2 { display:grid; grid-template-columns: 1fr 140px; gap:8px; }
   .muted { color:var(--muted); font-size:12px; }
   textarea { width:100%; min-height:140px; padding:8px; font-family: ui-monospace, Menlo, monospace; }
-  input[type="text"] { width:100%; padding:8px; }
   button { padding:10px 14px; cursor:pointer; }
   .banner { padding:10px 12px; border-radius:8px; margin:12px 0; border:1px solid transparent; }
   .info { background:#eef6ff; border-color:#c9e1ff; }
@@ -28,16 +26,13 @@
 
 <div class="controls">
   <div>
-    <div class="grid2">
-      <input id="lib" type="text" value="111030" title="libCode (송파도서관)">
-    </div>
-    <div class="muted">입력은 <b>ISBN 공백 제목</b>. 예) <code>9788936434267 아몬드</code> / OPAC 실시간만 사용, 5분 캐시.</div>
+    <div class="muted">도서관 코드 <b>111030</b>으로 고정. 입력은 <b>ISBN 공백 제목</b> 형식.</div>
   </div>
   <button id="go">조회</button>
 </div>
 
 <div style="margin-top:8px;">
-  <div class="muted small">ISBN 목록(줄바꿈 구분):</div>
+  <div class="muted small">예시:</div>
   <textarea id="isbnBox">9788936434267 아몬드
 9791163034353 리액트 모던 웹</textarea>
 </div>
@@ -51,30 +46,29 @@
 </details>
 
 <script>
-  // 네 워커 배치 API 주소
+  // ----- 고정 설정 -----
   const WORKER_URL = "https://billowing-hill-990a.newwave132.workers.dev/batch";
+  const LIB_CODE = "111030"; // 송파도서관 고정
 
+  // ----- 유틸 -----
   const $ = s => document.querySelector(s);
   const banner = $("#banner"), dbg = $("#debug");
-
   const show = (t,m)=>{ banner.className = `banner ${t}`; banner.textContent = m; };
   const clearBanner = ()=>{ banner.className=""; banner.textContent=""; };
   const log = (x)=>{ dbg.textContent += (dbg.textContent? "\n":"") + x; };
 
-  // -------- 입력 파서: "ISBN 공백 제목" → {isbn,title}
+  // "ISBN 공백 제목" → {isbn,title}
   function parseLines(raw){
     return raw.split(/\r?\n/)
-      .map(s => s.trim())
-      .filter(Boolean)
+      .map(s => s.trim()).filter(Boolean)
       .map(s => {
-        // 앞쪽은 ISBN(10~13자리, 하이픈 허용), 뒤는 전부 제목
         const m = s.match(/^\s*([0-9Xx\-]{10,17})\s*(.*)$/);
         const isbnRaw = (m ? m[1] : s).trim();
         const title = (m ? m[2] : "").trim();
         const isbn = isbnRaw.replace(/[^0-9Xx]/g, "");
-        return { isbn, title: title || isbn }; // 제목 없으면 ISBN을 임시 제목으로
+        return { isbn, title: title || isbn };
       })
-      .filter(x => x.isbn.length >= 10); // 안전장치
+      .filter(x => x.isbn.length >= 10);
   }
 
   function render(rows){
@@ -103,30 +97,25 @@
     });
   }
 
-  $("#go").onclick = async () => {
+  // ----- 실행 -----
+  document.getElementById("go").onclick = async () => {
     dbg.textContent=""; clearBanner();
-    const lib = $("#lib").value.trim();
-    const pairs = parseLines($("#isbnBox").value); // [{isbn,title}, ...]
-    if (!/^\d+$/.test(lib)) return show("error","libCode 숫자 확인.");
+    const pairs = parseLines(document.getElementById("isbnBox").value);
     if (!pairs.length) return show("error","ISBN 없음.");
 
     show("info", "조회 중…");
     try {
-      // 워커엔 ISBN만 보낸다
       const r = await fetch(WORKER_URL, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ lib, isbns: pairs.map(p=>p.isbn) })
+        body: JSON.stringify({ lib: LIB_CODE, isbns: pairs.map(p=>p.isbn) })
       });
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || "워커 오류");
 
-      // 응답 결과를 입력 제목과 매칭
+      // 입력 제목과 결과 매칭
       const map = new Map((j.results||[]).map(o => [o.isbn, o]));
-      const rows = pairs.map(p => {
-        const base = map.get(p.isbn) || { isbn:p.isbn, statusCode:"UNKNOWN" };
-        return { ...base, title: p.title };
-      });
+      const rows = pairs.map(p => ({ ...(map.get(p.isbn) || { isbn:p.isbn, statusCode:"UNKNOWN" }), title: p.title }));
 
       clearBanner();
       render(rows);
