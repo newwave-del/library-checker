@@ -1,0 +1,65 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>송파도서관 대출 가능(전일 기준)</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 700px; margin: 24px auto; padding: 0 12px; }
+  .row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 10px 0; border-bottom: 1px solid #eee; }
+  .ok { font-weight: 700; }
+</style>
+<h1>송파도서관: 대출 가능(전일 기준)</h1>
+<div>
+  <label>API KEY: <input id="key" placeholder="data4library authKey" /></label>
+  <button id="go">조회</button>
+</div>
+<div id="list"></div>
+<script>
+  // 👉 여기 ISBN 프리셋에 네가 보고 싶은 책들 넣어두면 됨
+  const ISBN_PRESET = [
+    "9788936434267", // 오만과 편견 예시(출판사마다 ISBN이 다를 수 있으니, 읽고 싶은 판본의 ISBN13로!)
+    "9791163034353"
+  ];
+  // 송파도서관 libCode
+  const LIB_CODE = 4720;
+
+  async function checkBatch(authKey, isbns) {
+    // bookExist는 보통 1개씩 조회 확실; 공지/매뉴얼 상 JSON 지원 and 전일 상태 명시
+    // 참고: https://data4library.kr/noticeV?cn=93 (JSON 지원), 매뉴얼 10번 항목(bookExist)
+    const results = [];
+    for (const isbn of isbns) {
+      const url = `https://data4library.kr/api/bookExist?authKey=${encodeURIComponent(authKey)}&libCode=${LIB_CODE}&isbn13=${isbn}&format=json`;
+      const res = await fetch(url);
+      if (!res.ok) { results.push({ isbn, error: `HTTP ${res.status}` }); continue; }
+      const data = await res.json();
+      // 응답 스키마: result.hasBook, result.loanAvailable (Y/N)
+      const r = data?.response?.result || data?.result || data;
+      results.push({ isbn, hasBook: r?.hasBook, loanAvailable: r?.loanAvailable });
+    }
+    return results;
+  }
+
+  document.getElementById('go').onclick = async () => {
+    const key = document.getElementById('key').value.trim();
+    if (!key) { alert("API 키 넣어."); return; }
+    const container = document.getElementById('list');
+    container.innerHTML = "조회 중...";
+    try {
+      const rows = await checkBatch(key, ISBN_PRESET);
+      container.innerHTML = "";
+      rows.forEach(({ isbn, hasBook, loanAvailable, error }) => {
+        const div = document.createElement('div');
+        div.className = "row";
+        if (error) {
+          div.innerHTML = `<div>${isbn}</div><div>에러</div><div>${error}</div>`;
+        } else {
+          const status = (hasBook === 'Y')
+            ? (loanAvailable === 'Y' ? '대출가능' : '대출중')
+            : '미소장';
+          div.innerHTML = `<div>${isbn}</div><div class="ok">${status}</div><div>${hasBook==='Y'?'📚':''}</div>`;
+        }
+        container.appendChild(div);
+      });
+    } catch (e) {
+      container.textContent = '실패: ' + e.message;
+    }
+  };
+</script>
