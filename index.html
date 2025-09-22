@@ -1,34 +1,40 @@
+
 <!doctype html>
+<meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>송파도서관 대출 가능(전일 기준)</title>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 12px; }
-  h1 { font-size: 20px; margin-bottom: 12px; }
-  .controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
-  .row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 10px 0; border-bottom: 1px solid #eee; }
-  .status-ok { font-weight: 700; }
-  .banner { padding: 10px 12px; border-radius: 8px; margin: 12px 0; }
-  .banner.error { background: #ffe8e8; border: 1px solid #ffb2b2; }
-  .banner.info { background: #eef6ff; border: 1px solid #c9e1ff; }
-  .banner.success { background: #e9f8ed; border: 1px solid #b4e3c3; }
-  .muted { color: #666; font-size: 12px; }
+  :root { --fg:#111; --muted:#666; --line:#eee; }
+  body { font-family: system-ui, -apple-system, sans-serif; color:var(--fg);
+         max-width: 760px; margin: 24px auto; padding: 0 12px; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  .controls { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+  .grid2 { display:grid; grid-template-columns: 1fr 120px; gap:8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  input[type="text"], textarea { padding: 8px; width: 100%; box-sizing: border-box; }
+  textarea { min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  button { padding: 10px 14px; cursor: pointer; }
+  .banner { padding: 10px 12px; border-radius: 8px; margin: 12px 0; border: 1px solid transparent; }
+  .banner.info { background:#eef6ff; border-color:#c9e1ff; }
+  .banner.error { background:#ffe8e8; border-color:#ffb2b2; }
+  .banner.success { background:#e9f8ed; border-color:#b4e3c3; }
+  .row { display: grid; grid-template-columns: 1fr 110px 1fr; gap: 8px;
+         padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .status { font-weight: 700; }
   .small { font-size: 12px; }
-  button { padding: 10px 14px; }
-  input[type="text"] { padding: 8px; width: 100%; }
-  textarea { width: 100%; min-height: 110px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  details { margin: 8px 0; }
-  code { font-family: ui-monospace, Consolas, Menlo, SFMono-Regular, monospace; }
+  details { margin: 10px 0; }
+  code, pre { font-family: ui-monospace, Consolas, Menlo, SFMono-Regular, monospace; }
 </style>
 
 <h1>송파도서관: 대출 가능(전일 기준)</h1>
 
 <div class="controls">
   <div>
-    <div style="display:grid; grid-template-columns: 1fr 110px; gap:8px;">
-      <input id="key" type="text" placeholder="data4library authKey" />
-      <input id="lib" type="text" value="4720" title="libCode" />
+    <div class="grid2">
+      <input id="key" type="text" placeholder="data4library authKey (승인 후 사용)">
+      <input id="lib" type="text" value="4720" title="libCode (송파도서관)">
     </div>
-    <div class="muted small">※ 전일 기준 상태. 실시간 아님. 오류 시 상단 배너 확인.</div>
+    <div class="muted">※ 대출 가능 여부는 ‘전날 기준’이야. 실시간 아님.</div>
   </div>
   <button id="go">조회</button>
 </div>
@@ -44,27 +50,56 @@
 
 <details>
   <summary class="small">디버그 보기</summary>
-  <pre id="debug" class="small" style="white-space:pre-wrap"></pre>
+  <pre id="debug" class="small" style="white-space:pre-wrap; overflow:auto; max-height: 50vh;"></pre>
 </details>
 
 <script>
-  // ---- 유틸
-  const $ = sel => document.querySelector(sel);
-  function parseISBNs(raw) { return raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean); }
-  function showBanner(type, msg) { const b=$("#banner"); b.className=`banner ${type}`; b.textContent=msg; }
-  function clearBanner(){ const b=$("#banner"); b.className=""; b.textContent=""; }
-  function setDebug(txt){ $("#debug").textContent = txt || ""; }
+  // ---------- 유틸 ----------
+  const $ = s => document.querySelector(s);
+  const banner = $("#banner");
+  const dbg = $("#debug");
 
-  function buildBookExistURL(authKey, libCode, isbn) {
-    const u = new URL("https://data4library.kr/api/bookExist");
-    u.searchParams.set("authKey", authKey);
-    u.searchParams.set("libCode", String(libCode));
-    u.searchParams.set("isbn13", isbn);
-    u.searchParams.set("format", "json");
-    return u.toString();
+  function showBanner(type, msg){ banner.className = `banner ${type}`; banner.textContent = msg; }
+  function clearBanner(){ banner.className = ""; banner.textContent = ""; }
+
+  function setDebug(txt){ dbg.textContent = txt || ""; }
+  function appendDebug(txt){
+    if (!txt) return;
+    dbg.textContent += (dbg.textContent ? "\n" : "") + txt;
   }
+  const pretty = (obj) => JSON.stringify(obj, null, 2);
+
+  function maskKey(k){
+    if (!k) return "";
+    const t = k.trim();
+    return t.length > 8 ? (t.slice(0,4) + "…" + t.slice(-4)) : "****";
+  }
+  function redactKeyInUrl(u){
+    try {
+      const x = new URL(u);
+      if (x.searchParams.has("authKey")) x.searchParams.set("authKey", maskKey(x.searchParams.get("authKey")));
+      return x.toString();
+    } catch { return u; }
+  }
+
+  function parseISBNs(raw){
+    return raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  }
+
+  function detectApiError(json){
+    const resp = json?.response ?? json;
+    const err = resp?.error ?? json?.error;
+    if (err){
+      return { isError:true, code: err.code ?? err.status ?? err.errorCode ?? null,
+               message: err.message ?? err.msg ?? err.reason ?? err.error ?? "API 오류" };
+    }
+    if (typeof resp?.errCode !== "undefined" || typeof resp?.errMsg !== "undefined"){
+      return { isError:true, code: resp.errCode ?? null, message: resp.errMsg ?? "API 오류" };
+    }
+    return { isError:false };
+  }
+
   function buildKeyProbeURL(authKey){
-    // 키 검증 선행: 공개 도서관 목록 1건만 조회(키가 틀리면 거의 100% 에러를 뱉음)
     const u = new URL("https://data4library.kr/api/libSrch");
     u.searchParams.set("authKey", authKey);
     u.searchParams.set("pageNo", "1");
@@ -73,141 +108,158 @@
     return u.toString();
   }
 
-  // ---- 공통 에러 감지(키 오류/쿼터/파라미터/서버)
-  function detectApiError(json){
-    const resp = json?.response ?? json;
-    const err = resp?.error ?? json?.error;
-    if (err) {
-      // {response:{error:{message, code}}} / {error:{msg}} 등
-      return { isError:true, code: err.code ?? err.status ?? null, message: err.message ?? err.msg ?? err.reason ?? "API 오류" };
-    }
-    // 또 다른 패턴: {response:{errCode, errMsg}}
-    if (typeof resp?.errCode !== "undefined" || typeof resp?.errMsg !== "undefined") {
-      return { isError:true, code: resp.errCode ?? null, message: resp.errMsg ?? "API 오류" };
-    }
-    return { isError:false };
+  function buildBookExistURL(authKey, libCode, isbn){
+    const u = new URL("https://data4library.kr/api/bookExist");
+    u.searchParams.set("authKey", authKey);
+    u.searchParams.set("libCode", String(libCode));
+    u.searchParams.set("isbn13", isbn);
+    u.searchParams.set("format", "json");
+    return u.toString();
   }
 
-  // ---- 키 유효성 선검사
+  // ---------- 키 유효성 선검사 ----------
   async function validateKey(authKey){
-    let r;
+    const url = buildKeyProbeURL(authKey);
+    appendDebug("키 검증 요청: " + redactKeyInUrl(url));
+    let res;
     try {
-      const res = await fetch(buildKeyProbeURL(authKey));
-      if (res.status === 401 || res.status === 403) throw new Error("API 키 권한 오류(401/403)");
-      if (res.status === 429) throw new Error("요청 과다(429)");
-      if (res.status >= 500) throw new Error(`서버 오류(${res.status})`);
-      r = await res.json().catch(async ()=>{
-        const t = await res.text();
-        throw new Error("JSON 아님/응답 형식 오류: " + t.slice(0,120));
-      });
-    } catch(e){
-      throw e;
+      res = await fetch(url);
+    } catch (e) {
+      appendDebug("키 검증 네트워크 오류: " + e.message);
+      throw new Error("네트워크 오류(키 검증)");
     }
-    const e = detectApiError(r);
-    if (e.isError) throw new Error(e.message || "API 오류");
-    // 정상: 최소한 libs 같은 정상 구조여야 함
-    const libs = r?.response?.libs ?? r?.libs;
-    if (!libs) throw new Error("API 응답 비정상(키 검증 실패)");
+    if (res.status === 401 || res.status === 403) throw new Error("API 키 권한 오류(401/403)");
+    if (res.status === 429) throw new Error("요청 과다(429)");
+    if (res.status >= 500) throw new Error(`서버 오류(${res.status})`);
+
+    let json;
+    try {
+      json = await res.json();
+    } catch {
+      const text = await res.text();
+      appendDebug("키 검증 응답(비JSON):\n" + text.slice(0, 300));
+      throw new Error("JSON 아님/응답 형식 오류(키 검증)");
+    }
+
+    const e = detectApiError(json);
+    if (e.isError){
+      appendDebug("키 검증 응답(에러 바디):\n" + pretty(json));
+      throw new Error(`[키 검증 실패] ${e.message}${e.code?` (code:${e.code})`:''}`);
+    }
+
+    const libs = json?.response?.libs ?? json?.libs;
+    if (!libs){
+      appendDebug("키 검증 응답(비정상 구조):\n" + pretty(json));
+      throw new Error("API 응답 비정상(키 검증 실패)");
+    }
+    appendDebug("키 검증 OK");
     return true;
   }
 
-  // ---- 단건 조회
-  function extractResult(json) {
+  // ---------- 단건 조회 ----------
+  function extractResult(json){
     const resp = json?.response ?? json;
     const r = resp?.result ?? resp;
     return { hasBook: r?.hasBook, loanAvailable: r?.loanAvailable };
   }
 
-  async function fetchBookExistOnce(authKey, libCode, isbn) {
+  async function fetchBookExistOnce(authKey, libCode, isbn){
     const url = buildBookExistURL(authKey, libCode, isbn);
+    appendDebug("bookExist 요청: " + redactKeyInUrl(url));
+
     let res;
     try { res = await fetch(url); }
-    catch { return { isbn, error: "네트워크 오류" }; }
+    catch (e) { appendDebug("bookExist 네트워크 오류: " + e.message); return { isbn, error: "네트워크 오류" }; }
 
-    if (res.status === 401 || res.status === 403) return { isbn, fatal: true, error: "API 키 권한 오류(401/403)" };
-    if (res.status === 429) return { isbn, fatal: true, error: "요청 과다(429)" };
-    if (res.status >= 500) return { isbn, fatal: true, error: `서버 오류(${res.status})` };
+    if (res.status === 401 || res.status === 403) return { isbn, fatal:true, error:"API 키 권한 오류(401/403)" };
+    if (res.status === 429) return { isbn, fatal:true, error:"요청 과다(429)" };
+    if (res.status >= 500) return { isbn, fatal:true, error:`서버 오류(${res.status})` };
 
     let json;
     try { json = await res.json(); }
     catch {
       const text = await res.text();
-      return { isbn, fatal: true, error: "JSON 아님/응답 형식 오류", raw: text.slice(0, 160) };
+      appendDebug("bookExist 응답(비JSON):\n" + text.slice(0, 300));
+      return { isbn, fatal:true, error:"JSON 아님/응답 형식 오류" };
     }
 
     const apiErr = detectApiError(json);
-    if (apiErr.isError) return { isbn, fatal: true, error: apiErr.message || "API 오류" };
+    if (apiErr.isError){
+      appendDebug("bookExist 응답(에러 바디):\n" + pretty(json));
+      return { isbn, fatal:true, error: `${apiErr.message}${apiErr.code?` (code:${apiErr.code})`:''}` };
+    }
 
     const { hasBook, loanAvailable } = extractResult(json);
-    if (typeof hasBook === 'undefined' && typeof loanAvailable === 'undefined') {
+    if (typeof hasBook === 'undefined' && typeof loanAvailable === 'undefined'){
+      appendDebug("bookExist 응답(필드 누락):\n" + pretty(json));
       return { isbn, error: "비정상 응답(필드 누락)" };
     }
+
+    appendDebug("bookExist OK → " + isbn + " : hasBook=" + hasBook + ", loanAvailable=" + loanAvailable);
     return { isbn, hasBook, loanAvailable };
   }
 
-  async function checkBatch(authKey, libCode, isbns) {
+  async function checkBatch(authKey, libCode, isbns){
     const out = [];
-    for (let i = 0; i < isbns.length; i++) {
+    for (let i = 0; i < isbns.length; i++){
       const r = await fetchBookExistOnce(authKey, libCode, isbns[i]);
-      if (r.fatal) throw new Error(r.error); // 키/쿼터/서버 등은 즉시 중단
+      if (r.fatal) throw new Error(r.error);
       out.push(r);
     }
     return out;
   }
 
-  function renderRows(rows) {
-    const container = $("#list");
-    container.innerHTML = "";
+  // ---------- 렌더 ----------
+  function renderRows(rows){
+    const box = $("#list");
+    box.innerHTML = "";
     rows.forEach(({ isbn, hasBook, loanAvailable, error }) => {
-      const div = document.createElement('div');
+      const div = document.createElement("div");
       div.className = "row";
-      if (error) {
-        div.innerHTML = `<div>${isbn}</div><div class="status-ok">오류</div><div class="small">${error}</div>`;
+      if (error){
+        div.innerHTML = `<div>${isbn}</div><div class="status">오류</div><div class="small">${error}</div>`;
       } else {
-        let status = '미소장';
-        if (hasBook === 'Y') status = (loanAvailable === 'Y') ? '대출가능' : '대출중';
-        else if (hasBook === 'N') status = '미소장';
-        else status = '불명';
-        div.innerHTML = `<div>${isbn}</div><div class="status-ok">${status}</div><div>${hasBook==='Y'?'📚':''}</div>`;
+        let status = "미소장";
+        if (hasBook === "Y") status = (loanAvailable === "Y") ? "대출가능" : "대출중";
+        else if (hasBook === "N") status = "미소장";
+        else status = "불명";
+        div.innerHTML = `<div>${isbn}</div><div class="status">${status}</div><div>${hasBook==='Y'?'📚':''}</div>`;
       }
-      container.appendChild(div);
+      box.appendChild(div);
     });
   }
 
-  // ---- 버튼 핸들러
+  // ---------- 버튼 ----------
   $("#go").onclick = async () => {
     clearBanner(); setDebug("");
     const key = $("#key").value.trim();
     const lib = $("#lib").value.trim();
     const isbns = parseISBNs($("#isbnBox").value);
 
-    if (!key) { showBanner("error", "API 키 넣어."); return; }
-    if (!/^\d+$/.test(lib)) { showBanner("error", "libCode 숫자 확인해."); return; }
-    if (!isbns.length) { showBanner("error", "ISBN이 없음."); return; }
+    if (!key){ showBanner("error", "API 키 넣어."); return; }
+    if (!/^\d+$/.test(lib)){ showBanner("error", "libCode 숫자 확인해."); return; }
+    if (isbns.length === 0){ showBanner("error", "ISBN이 없음."); return; }
 
-    $("#list").innerHTML = "<div class='banner info'>키 확인 중…</div>";
+    $("#list").innerHTML = `<div class="banner info">키 확인 중… (${maskKey(key)})</div>`;
 
     try {
-      await validateKey(key); // 1) 키 선검사
+      await validateKey(key);
       showBanner("success", "API 키 확인됨. 조회 시작한다.");
-    } catch(e) {
+    } catch (e){
       showBanner("error", `배치 중단(키 오류/응답 이상): ${e.message}`);
       $("#list").innerHTML = "";
-      setDebug(String(e.stack||e));
       return;
     }
 
-    $("#list").innerHTML = "<div class='banner info'>ISBN 조회 중…</div>";
+    $("#list").innerHTML = `<div class="banner info">ISBN 조회 중…</div>`;
 
     try {
-      const rows = await checkBatch(key, lib, isbns); // 2) 실제 조회
+      const rows = await checkBatch(key, lib, isbns);
       clearBanner();
       renderRows(rows);
-      setDebug(""); // 필요시 JSON 찍고 싶으면 여기서 rows 출력
-    } catch (e) {
+    } catch (e){
       showBanner("error", `배치 중단: ${e.message}`);
       $("#list").innerHTML = "";
-      setDebug(String(e.stack||e));
     }
   };
 </script>
