@@ -3,7 +3,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>송파도서관 대출 확인(실시간·배치·송파고정)</title>
 <style>
-  :root { --fg:#111; --muted:#666; --line:#eee; }
+  :root {
+    --fg:#111; --muted:#666; --line:#eee;
+    --ok-fg:#0a6b2b;      --ok-bg:#e8f7ee;      --ok-bd:#b7e2c7;
+    --hold-fg:#8a5a00;    --hold-bg:#fff4d6;    --hold-bd:#ffe1a1;
+    --out-fg:#a3122c;     --out-bg:#ffe8ec;     --out-bd:#ffc5d0;
+    --unavail-fg:#555;    --unavail-bg:#f1f1f1; --unavail-bd:#ddd;
+  }
   body { font-family: system-ui, -apple-system, sans-serif; color:var(--fg); max-width:760px; margin:24px auto; padding:0 12px; }
   h1 { font-size:20px; margin:0 0 12px; }
   .controls { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:end; }
@@ -14,9 +20,16 @@
   .info { background:#eef6ff; border-color:#c9e1ff; }
   .error { background:#ffe8e8; border-color:#ffb2b2; }
   .success { background:#e9f8ed; border-color:#b4e3c3; }
-  .row { display:grid; grid-template-columns: 1.6fr 110px 160px 1fr; gap:8px; padding:10px 0; border-bottom:1px solid var(--line); }
+
+  .row { display:grid; grid-template-columns: 1.6fr 112px 180px 1fr; gap:8px; padding:10px 0; border-bottom:1px solid var(--line); align-items:center; }
   .title { font-weight:600; }
-  .status { font-weight:700; }
+
+  /* 상태 배지 색상 */
+  .status { display:inline-block; padding:4px 8px; border:1px solid; border-radius:8px; font-weight:700; line-height:1; white-space:nowrap; }
+  .status.ok     { color:var(--ok-fg);     background:var(--ok-bg);     border-color:var(--ok-bd); }
+  .status.hold   { color:var(--hold-fg);   background:var(--hold-bg);   border-color:var(--hold-bd); }
+  .status.out    { color:var(--out-fg);    background:var(--out-bg);    border-color:var(--out-bd); }
+  .status.unavail{ color:var(--unavail-fg);background:var(--unavail-bg);border-color:var(--unavail-bd); }
   .small { font-size:12px; }
   details { margin:10px 0; }
   pre { white-space:pre-wrap; max-height:50vh; overflow:auto; }
@@ -25,9 +38,7 @@
 <h1>송파도서관: 대출 확인(실시간·배치)</h1>
 
 <div class="controls">
-  <div>
-    <div class="muted">도서관 코드 <b>111030</b>으로 고정. 입력은 <b>ISBN 공백 제목</b> 형식.</div>
-  </div>
+  <div class="muted">도서관 코드 <b>111030</b> 고정. 입력은 <b>ISBN 공백 제목</b> 형식.</div>
   <button id="go">조회</button>
 </div>
 
@@ -48,7 +59,7 @@
 <script>
   // ----- 고정 설정 -----
   const WORKER_URL = "https://billowing-hill-990a.newwave132.workers.dev/batch";
-  const LIB_CODE = "111030"; // 송파도서관 고정
+  const LIB_CODE = "111030"; // 송파 고정
 
   // ----- 유틸 -----
   const $ = s => document.querySelector(s);
@@ -71,26 +82,41 @@
       .filter(x => x.isbn.length >= 10);
   }
 
+  function clsByCode(code){
+    if (code === 'AVAILABLE')   return 'ok';
+    if (code === 'ON_HOLD')     return 'hold';
+    if (code === 'CHECKED_OUT') return 'out';
+    if (code === 'UNAVAILABLE') return 'unavail';
+    return 'unavail';
+  }
+  function textByCode(code){
+    if (code === 'AVAILABLE')   return '대출가능';
+    if (code === 'ON_HOLD')     return '예약중';
+    if (code === 'CHECKED_OUT') return '대출중';
+    if (code === 'UNAVAILABLE') return '이용불가';
+    return '검색없음';
+  }
+  function liveDesc(code){
+    if (code === 'AVAILABLE')   return '대출가능(실시간)';
+    if (code === 'ON_HOLD')     return '예약중(실시간)';
+    if (code === 'CHECKED_OUT') return '대출중(실시간)';
+    if (code === 'UNAVAILABLE') return '이용불가(실시간)';
+    return '불명(실시간)';
+  }
+
   function render(rows){
     const box = $("#list"); box.innerHTML="";
     rows.forEach(x=>{
       const div = document.createElement("div");
       div.className = "row";
-      const liveStr =
-        x.statusCode === 'AVAILABLE'   ? "대출가능(실시간)" :
-        x.statusCode === 'ON_HOLD'     ? "예약중(실시간)"   :
-        x.statusCode === 'CHECKED_OUT' ? "대출중(실시간)"   :
-        x.statusCode === 'UNAVAILABLE' ? "이용불가(실시간)" : "불명(실시간)";
-      const finalStat =
-        x.statusCode === 'AVAILABLE'   ? "대출가능" :
-        x.statusCode === 'ON_HOLD'     ? "예약중"   :
-        x.statusCode === 'CHECKED_OUT' ? "대출중"   :
-        x.statusCode === 'UNAVAILABLE' ? "이용불가" : "검색없음";
+      const cls = clsByCode(x.statusCode);
+      const finalText = textByCode(x.statusCode);
+      const liveStr = liveDesc(x.statusCode);
       const extra = x.dueDate ? `반납예정일 ${x.dueDate}`
                   : (x.sourceUrl ? `<a href="${x.sourceUrl}" target="_blank" rel="noreferrer">OPAC바로가기</a>` : "");
       div.innerHTML = `
         <div class="title">${x.title}</div>
-        <div class="status">${finalStat}</div>
+        <div><span class="status ${cls}">${finalText}</span></div>
         <div class="small">${liveStr}${x.cached?" · 캐시":""}</div>
         <div class="small">${extra}</div>`;
       box.appendChild(div);
@@ -113,9 +139,8 @@
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || "워커 오류");
 
-      // 입력 제목과 결과 매칭
       const map = new Map((j.results||[]).map(o => [o.isbn, o]));
-      const rows = pairs.map(p => ({ ...(map.get(p.isbn) || { isbn:p.isbn, statusCode:"UNKNOWN" }), title: p.title }));
+      const rows = pairs.map(p => ({ ...(map.get(p.isbn) || { isbn:p.isbn, statusCode:"UNAVAILABLE" }), title: p.title }));
 
       clearBanner();
       render(rows);
